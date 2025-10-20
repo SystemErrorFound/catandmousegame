@@ -8,16 +8,14 @@ class CatAI:
         self.game = game
         
     def update_cat_memory(self):
-        mouse_pos_tuple = (self.game.mouse_pos['x'], self.game.mouse_pos['y'])
-        self.game.cat_memory.append(mouse_pos_tuple)
+        self.game.cat_memory.append((self.game.mouse_pos['x'], self.game.mouse_pos['y']))
         if len(self.game.cat_memory) > self.game.memory_size:
             self.game.cat_memory.pop(0)
         
         if self.game.last_cat_pos:
-            if self.game.cat_pos['x'] == self.game.last_cat_pos['x'] and self.game.cat_pos['y'] == self.game.last_cat_pos['y']:
-                self.game.cat_stuck_counter += 1
-            else:
-                self.game.cat_stuck_counter = 0
+            self.game.cat_stuck_counter = self.game.cat_stuck_counter + 1 if (
+                self.game.cat_pos['x'] == self.game.last_cat_pos['x'] and 
+                self.game.cat_pos['y'] == self.game.last_cat_pos['y']) else 0
         
         self.game.last_cat_pos = {'x': self.game.cat_pos['x'], 'y': self.game.cat_pos['y']}
 
@@ -37,12 +35,8 @@ class CatAI:
         if self.game.is_king_mouse: 
             move = self.improved_flee_move(self.game.cat_pos, self.game.mouse_pos)
         else:
-            if self.game.cat_difficulty == 'easy': 
-                move = self.improved_random_move(self.game.cat_pos)
-            elif self.game.cat_difficulty == 'medium': 
-                move = self.improved_greedy_move(self.game.cat_pos, self.game.mouse_pos)
-            else: 
-                move = self.improved_a_star_move(self.game.cat_pos, self.game.mouse_pos)
+            moves = {'easy': self.improved_random_move, 'medium': self.improved_greedy_move, 'hard': self.improved_a_star_move}
+            move = moves[self.game.cat_difficulty](self.game.cat_pos, self.game.mouse_pos) if self.game.cat_difficulty != 'easy' else moves['easy'](self.game.cat_pos)
         
         if move: 
             self.game.move_character(self.game.cat_pos, move['dx'], move['dy'])
@@ -50,58 +44,37 @@ class CatAI:
         self.game.check_collisions_and_state()
 
     def improved_random_move(self, pos):
-        valid_moves = []
-        
-        for move in MOVES:
-            new_x, new_y = pos['x'] + move['dx'], pos['y'] + move['dy']
-            if (0 <= new_x < self.game.board_size and 0 <= new_y < self.game.board_size and 
-                self.game.board[new_y][new_x] != 1):
-                valid_moves.append(move)
+        valid_moves = [move for move in MOVES if (
+            0 <= (nx := pos['x'] + move['dx']) < self.game.board_size and 
+            0 <= (ny := pos['y'] + move['dy']) < self.game.board_size and 
+            self.game.board[ny][nx] != 1)]
         
         if not valid_moves:
             return None
             
         if self.game.cat_stuck_counter > 2:
-            unexplored_moves = []
-            for move in valid_moves:
-                new_pos = (pos['x'] + move['dx'], pos['y'] + move['dy'])
-                if new_pos not in self.game.cat_memory[-3:]:
-                    unexplored_moves.append(move)
+            unexplored_moves = [move for move in valid_moves if (pos['x'] + move['dx'], pos['y'] + move['dy']) not in self.game.cat_memory[-3:]]
             if unexplored_moves:
                 valid_moves = unexplored_moves
         
-        best_move = None
-        min_dist = float('inf')
+        best_move, min_dist = None, float('inf')
         
         for move in valid_moves:
             new_x, new_y = pos['x'] + move['dx'], pos['y'] + move['dy']
-            
             dist = abs(new_x - self.game.mouse_pos['x']) + abs(new_y - self.game.mouse_pos['y'])
+            penalty = (2 if (new_x, new_y) in self.game.cat_memory[-2:] else 0) + (
+                1 if sum(1 for dx, dy in DIRS if (
+                    new_x + dx >= self.game.board_size or new_y + dy >= self.game.board_size or
+                    new_x + dx < 0 or new_y + dy < 0 or self.game.board[new_y + dy][new_x + dx] == 1)) >= 3 else 0)
             
-            penalty = 0
-            if (new_x, new_y) in self.game.cat_memory[-2:]:
-                penalty += 2
-            
-            adjacent_walls = sum(1 for dx, dy in DIRS
-                               if (new_x + dx >= self.game.board_size or new_y + dy >= self.game.board_size or
-                                   new_x + dx < 0 or new_y + dy < 0 or
-                                   self.game.board[new_y + dy][new_x + dx] == 1))
-            if adjacent_walls >= 3:
-                penalty += 1
-            
-            adjusted_dist = dist + penalty
-            
-            if adjusted_dist < min_dist:
-                min_dist = adjusted_dist
-                best_move = move
+            if (adjusted_dist := dist + penalty) < min_dist:
+                min_dist, best_move = adjusted_dist, move
         
         return best_move if best_move else valid_moves[0]
     
     def improved_greedy_move(self, from_pos, to_pos):
         target_pos = self.predict_mouse_position(to_pos)
-        
-        best_move, min_dist = None, float('inf')
-        valid_moves = []
+        best_move, min_dist, valid_moves = None, float('inf'), []
         
         for move in MOVES:
             new_x, new_y = from_pos['x'] + move['dx'], from_pos['y'] + move['dy']
@@ -109,29 +82,20 @@ class CatAI:
                 self.game.board[new_y][new_x] != 1):
                 
                 dist = abs(new_x - target_pos['x']) + abs(new_y - target_pos['y'])
-                
-                penalty = 0
-                if (new_x, new_y) in self.game.cat_memory[-2:]:
-                    penalty += 3
-                
-                adjacent_walls = sum(1 for dx, dy in DIRS
-                                   if (new_x + dx >= self.game.board_size or new_y + dy >= self.game.board_size or
-                                       new_x + dx < 0 or new_y + dy < 0 or
-                                       self.game.board[new_y + dy][new_x + dx] == 1))
-                if adjacent_walls >= 3:
-                    penalty += 2
+                penalty = (3 if (new_x, new_y) in self.game.cat_memory[-2:] else 0) + (
+                    2 if sum(1 for dx, dy in DIRS if (
+                        new_x + dx >= self.game.board_size or new_y + dy >= self.game.board_size or
+                        new_x + dx < 0 or new_y + dy < 0 or self.game.board[new_y + dy][new_x + dx] == 1)) >= 3 else 0)
                 
                 adjusted_dist = dist + penalty
                 valid_moves.append((move, adjusted_dist))
                 
                 if adjusted_dist < min_dist:
-                    min_dist = adjusted_dist
-                    best_move = move
+                    min_dist, best_move = adjusted_dist, move
         
-        if self.game.cat_stuck_counter > 3:
+        if self.game.cat_stuck_counter > 3 and len(valid_moves) > 1:
             valid_moves.sort(key=lambda x: x[1])
-            if len(valid_moves) > 1:
-                return valid_moves[1][0]
+            return valid_moves[1][0]
         
         return best_move if best_move else self.improved_random_move(from_pos)
 
@@ -202,97 +166,62 @@ class CatAI:
         return mouse_pos
 
     def improved_flee_move(self, from_pos, away_from_pos):
-        def distance(p1, p2): 
-            return abs(p1['x'] - p2['x']) + abs(p1['y'] - p2['y'])
-        
+        distance = lambda p1, p2: abs(p1['x'] - p2['x']) + abs(p1['y'] - p2['y'])
         current_dist = distance(from_pos, away_from_pos)
         
         if current_dist > 8:
             strategic_pos = self.find_strategic_position(from_pos, away_from_pos, 'maintain_distance')
-            if strategic_pos != from_pos:
-                path_to_strategic = self.find_path(from_pos, strategic_pos)
-                if path_to_strategic and len(path_to_strategic) > 1:
-                    return {'dx': path_to_strategic[1]['x'] - from_pos['x'], 
-                           'dy': path_to_strategic[1]['y'] - from_pos['y']}
+            if strategic_pos != from_pos and (path_to_strategic := self.find_path(from_pos, strategic_pos)) and len(path_to_strategic) > 1:
+                return {'dx': path_to_strategic[1]['x'] - from_pos['x'], 'dy': path_to_strategic[1]['y'] - from_pos['y']}
         
         if not self.game.flee_target or distance(from_pos, self.game.flee_target) < 2:
-            safe_spots = []
+            corners = [{'x': 1, 'y': 1}, {'x': self.game.board_size - 2, 'y': 1}, 
+                      {'x': 1, 'y': self.game.board_size - 2}, {'x': self.game.board_size - 2, 'y': self.game.board_size - 2}]
+            edges = [{'x': x, 'y': y} for i in range(3, self.game.board_size - 3, 2) 
+                    for x, y in [(1, i), (self.game.board_size - 2, i), (i, 1), (i, self.game.board_size - 2)]]
             
-            corners = [
-                {'x': 1, 'y': 1}, {'x': self.game.board_size - 2, 'y': 1}, 
-                {'x': 1, 'y': self.game.board_size - 2}, {'x': self.game.board_size - 2, 'y': self.game.board_size - 2}
-            ]
-            
-            edges = []
-            for i in range(3, self.game.board_size - 3, 2):
-                edges.extend([
-                    {'x': 1, 'y': i}, {'x': self.game.board_size - 2, 'y': i},
-                    {'x': i, 'y': 1}, {'x': i, 'y': self.game.board_size - 2}
-                ])
-            
-            for pos in corners + edges:
-                if self.game.board[pos['y']][pos['x']] == 0:
-                    pos_dist = distance(pos, away_from_pos)
-                    path_to_pos = self.find_path(from_pos, pos)
-                    if path_to_pos and pos_dist > current_dist:
-                        safe_spots.append((pos, pos_dist, len(path_to_pos)))
+            safe_spots = [(pos, pos_dist, len(path)) for pos in corners + edges 
+                         if self.game.board[pos['y']][pos['x']] == 0 and 
+                         (pos_dist := distance(pos, away_from_pos)) > current_dist and 
+                         (path := self.find_path(from_pos, pos))]
             
             if safe_spots:
                 safe_spots.sort(key=lambda x: (-x[1], x[2]))
                 self.game.flee_target = safe_spots[0][0]
         
-        if self.game.flee_target:
-            path_to_safety = self.find_path(from_pos, self.game.flee_target)
-            if path_to_safety and len(path_to_safety) > 1:
-                return {'dx': path_to_safety[1]['x'] - from_pos['x'], 
-                       'dy': path_to_safety[1]['y'] - from_pos['y']}
+        if self.game.flee_target and (path_to_safety := self.find_path(from_pos, self.game.flee_target)) and len(path_to_safety) > 1:
+            return {'dx': path_to_safety[1]['x'] - from_pos['x'], 'dy': path_to_safety[1]['y'] - from_pos['y']}
         
         best_move, max_dist = None, -1
-        
         for move in MOVES:
             new_x, new_y = from_pos['x'] + move['dx'], from_pos['y'] + move['dy']
             if (0 <= new_x < self.game.board_size and 0 <= new_y < self.game.board_size and 
                 self.game.board[new_y][new_x] != 1):
-                
                 new_dist = distance({'x': new_x, 'y': new_y}, away_from_pos)
-                
-                penalty = 0
-                if (new_x, new_y) in self.game.cat_memory[-2:]:
-                    penalty = 1
-                
-                adjusted_dist = new_dist - penalty
+                adjusted_dist = new_dist - (1 if (new_x, new_y) in self.game.cat_memory[-2:] else 0)
                 if adjusted_dist > max_dist:
-                    max_dist = adjusted_dist
-                    best_move = move
+                    max_dist, best_move = adjusted_dist, move
         
         return best_move
     
     def find_path_with_memory(self, start, goal):
-        def heuristic(a, b): 
-            return abs(a['x'] - b['x']) + abs(a['y'] - b['y'])
+        heuristic = lambda a, b: abs(a['x'] - b['x']) + abs(a['y'] - b['y'])
         
         def get_path_cost(current, neighbor):
-            base_cost = 1
-            memory_penalty = 0
-            
             neighbor_pos = (neighbor['x'], neighbor['y'])
             if neighbor_pos in self.game.cat_memory:
                 for i, pos in enumerate(reversed(self.game.cat_memory)):
                     if pos == neighbor_pos:
-                        memory_penalty = (len(self.game.cat_memory) - i) * 0.5
-                        break
-            
-            return base_cost + memory_penalty
+                        return 1 + (len(self.game.cat_memory) - i) * 0.5
+            return 1
         
-        open_set = []
-        came_from = {}
+        open_set, came_from = [], {}
         g_score = {(start['x'], start['y']): 0}
         f_score = {(start['x'], start['y']): heuristic(start, goal)}
-        
         heapq.heappush(open_set, (f_score[(start['x'], start['y'])], start['x'], start['y']))
         
         while open_set:
-            current_f, current_x, current_y = heapq.heappop(open_set)
+            _, current_x, current_y = heapq.heappop(open_set)
             current = {'x': current_x, 'y': current_y}
             
             if current['x'] == goal['x'] and current['y'] == goal['y']:
@@ -304,36 +233,28 @@ class CatAI:
             
             for dx, dy in DIRS:
                 neighbor = {'x': current['x'] + dx, 'y': current['y'] + dy}
-                
                 if not (0 <= neighbor['x'] < self.game.board_size and 
                        0 <= neighbor['y'] < self.game.board_size and 
                        self.game.board[neighbor['y']][neighbor['x']] != 1):
                     continue
                 
-                tentative_g_score = g_score.get((current['x'], current['y']), float('inf'))
-                tentative_g_score += get_path_cost(current, neighbor)
-                
+                tentative_g_score = g_score.get((current['x'], current['y']), float('inf')) + get_path_cost(current, neighbor)
                 neighbor_key = (neighbor['x'], neighbor['y'])
+                
                 if tentative_g_score < g_score.get(neighbor_key, float('inf')):
                     came_from[neighbor_key] = current
                     g_score[neighbor_key] = tentative_g_score
                     f_score[neighbor_key] = tentative_g_score + heuristic(neighbor, goal)
-                    
                     if not any(item[1] == neighbor['x'] and item[2] == neighbor['y'] for item in open_set):
                         heapq.heappush(open_set, (f_score[neighbor_key], neighbor['x'], neighbor['y']))
         
         return None
 
     def find_path(self, start, goal):
-        def heuristic(a, b): 
-            dx = abs(a['x'] - b['x'])
-            dy = abs(a['y'] - b['y'])
-            return dx + dy + min(dx, dy) * 0.001
+        heuristic = lambda a, b: abs(a['x'] - b['x']) + abs(a['y'] - b['y']) + min(abs(a['x'] - b['x']), abs(a['y'] - b['y'])) * 0.001
         
-        open_set = []
-        came_from = {}
+        open_set, came_from = [], {}
         g_score = {(start['x'], start['y']): 0}
-        
         heapq.heappush(open_set, (heuristic(start, goal), start['x'], start['y']))
         
         while open_set:
@@ -349,7 +270,6 @@ class CatAI:
             
             for dx, dy in DIRS:
                 neighbor = {'x': current['x'] + dx, 'y': current['y'] + dy}
-                
                 if not (0 <= neighbor['x'] < self.game.board_size and 
                        0 <= neighbor['y'] < self.game.board_size and 
                        self.game.board[neighbor['y']][neighbor['x']] != 1):
@@ -361,8 +281,7 @@ class CatAI:
                 if tentative_g_score < g_score.get(neighbor_key, float('inf')):
                     came_from[neighbor_key] = current
                     g_score[neighbor_key] = tentative_g_score
-                    f = tentative_g_score + heuristic(neighbor, goal)
-                    heapq.heappush(open_set, (f, neighbor['x'], neighbor['y']))
+                    heapq.heappush(open_set, (tentative_g_score + heuristic(neighbor, goal), neighbor['x'], neighbor['y']))
         
         return None
 
@@ -374,66 +293,35 @@ class CatAI:
                 for dy in range(-3, 4):
                     if dx == 0 and dy == 0:
                         continue
-                    
-                    candidate_x = target_pos['x'] + dx
-                    candidate_y = target_pos['y'] + dy
-                    
-                    if (0 <= candidate_x < self.game.board_size and 
-                        0 <= candidate_y < self.game.board_size and 
+                    candidate_x, candidate_y = target_pos['x'] + dx, target_pos['y'] + dy
+                    if (0 <= candidate_x < self.game.board_size and 0 <= candidate_y < self.game.board_size and 
                         self.game.board[candidate_y][candidate_x] != 1):
-                        
-                        candidate = {'x': candidate_x, 'y': candidate_y}
                         dist_to_target = abs(candidate_x - target_pos['x']) + abs(candidate_y - target_pos['y'])
                         dist_from_cat = abs(candidate_x - from_pos['x']) + abs(candidate_y - from_pos['y'])
                         if dist_to_target <= 3 and dist_from_cat <= 6:
-                            strategic_value = 10 - dist_to_target - (dist_from_cat * 0.1)
-                            candidates.append((candidate, strategic_value))
+                            candidates.append(({'x': candidate_x, 'y': candidate_y}, 10 - dist_to_target - dist_from_cat * 0.1))
         
         elif strategy == 'surround':
             for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                candidate_x = target_pos['x'] + dx
-                candidate_y = target_pos['y'] + dy
-                
-                if (0 <= candidate_x < self.game.board_size and 
-                    0 <= candidate_y < self.game.board_size and 
+                candidate_x, candidate_y = target_pos['x'] + dx, target_pos['y'] + dy
+                if (0 <= candidate_x < self.game.board_size and 0 <= candidate_y < self.game.board_size and 
                     self.game.board[candidate_y][candidate_x] != 1):
-                    
-                    candidate = {'x': candidate_x, 'y': candidate_y}
                     dist_from_cat = abs(candidate_x - from_pos['x']) + abs(candidate_y - from_pos['y'])
-                    
                     if dist_from_cat <= 8:
-                        strategic_value = 10 - (dist_from_cat * 0.2)
-                        candidates.append((candidate, strategic_value))
+                        candidates.append(({'x': candidate_x, 'y': candidate_y}, 10 - dist_from_cat * 0.2))
         
         elif strategy == 'maintain_distance':
-            optimal_distance = 6
-            
             for dx in range(-4, 5):
                 for dy in range(-4, 5):
                     if dx == 0 and dy == 0:
                         continue
-                    
-                    candidate_x = from_pos['x'] + dx
-                    candidate_y = from_pos['y'] + dy
-                    
-                    if (0 <= candidate_x < self.game.board_size and 
-                        0 <= candidate_y < self.game.board_size and 
+                    candidate_x, candidate_y = from_pos['x'] + dx, from_pos['y'] + dy
+                    if (0 <= candidate_x < self.game.board_size and 0 <= candidate_y < self.game.board_size and 
                         self.game.board[candidate_y][candidate_x] != 1):
-                        
-                        candidate = {'x': candidate_x, 'y': candidate_y}
-                        
                         dist_to_target = abs(candidate_x - target_pos['x']) + abs(candidate_y - target_pos['y'])
-                        
-                        distance_score = abs(optimal_distance - dist_to_target)
-                        strategic_value = 10 - distance_score
-                        
+                        strategic_value = 10 - abs(6 - dist_to_target)
                         if (candidate_x, candidate_y) not in self.game.cat_memory[-3:]:
                             strategic_value += 2
-                        
-                        candidates.append((candidate, strategic_value))
+                        candidates.append(({'x': candidate_x, 'y': candidate_y}, strategic_value))
         
-        if candidates:
-            candidates.sort(key=lambda x: x[1], reverse=True)
-            return candidates[0][0]
-        
-        return target_pos
+        return candidates[0][0] if candidates and (candidates.sort(key=lambda x: x[1], reverse=True) or True) else target_pos
