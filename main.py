@@ -23,69 +23,114 @@ class CatMouseGamePygame:
         self.title_font = pygame.font.Font(FONT_04B_PATH, 36)
         self.medium_font = pygame.font.Font(FONT_04B_PATH, 20)
         self.small_font = pygame.font.Font(FONT_04B_PATH, 15)
-
-        self.cat_memory, self.memory_size, self.cat_stuck_counter, self.last_cat_pos, self.flee_target, self.cat_move_timer = [], 5, 0, None, None, 0
         
         self.ui_renderer = UIRenderer(self)
         self.game_renderer = GameRenderer(self)
         self.cat_ai = CatAI(self)
         
         self.load_assets()
-        self.game_state, self.cat_difficulty = 'MENU', None
-        self.board, self.cheese_positions = [], []
+        
+        self.game_state = 'MENU'
+        self.cat_difficulty = None
+        self.board = []
+        self.cheese_positions = []
         self.mouse_pos = {'x': 1, 'y': 1}
         self.cat_pos = {'x': 13, 'y': 13}
-        self.cheese_collected, self.is_king_mouse, self.start_time, self.elapsed_time, self.player_moved = 0, False, 0, 0, False
-        self.end_message, self.end_details, self.is_win = "", "", False
+        self.cheese_collected = 0
+        self.is_king_mouse = False
+        self.start_time = 0
+        self.elapsed_time = 0
+        self.player_moved = False
+        self.end_message = ""
+        self.end_details = ""
+        self.is_win = False
         
-        self.easy_button_rect = self.medium_button_rect = self.hard_button_rect = pygame.Rect(0, 0, 140, 50)
+        self.easy_button_rect = pygame.Rect(0, 0, 140, 50)
+        self.medium_button_rect = pygame.Rect(0, 0, 140, 50)
+        self.hard_button_rect = pygame.Rect(0, 0, 140, 50)
         self.start_button_rect = pygame.Rect(0, 0, 200, 60)
-        self.play_again_button_rect = self.back_to_menu_button_rect = pygame.Rect(0, 0, 160, 50)
+        self.play_again_button_rect = pygame.Rect(0, 0, 160, 50)
+        self.back_to_menu_button_rect = pygame.Rect(0, 0, 160, 50)
         
     def load_assets(self):
-        load_scale = lambda f: pygame.transform.smoothscale(
-            pygame.image.load(os.path.join("assets", f)).convert_alpha(), (self.cell_size, self.cell_size))
+        def load_and_scale(filename):
+            image = pygame.image.load(os.path.join("assets", filename)).convert_alpha()
+            return pygame.transform.smoothscale(image, (self.cell_size, self.cell_size))
 
-        self.mouse_img, self.mouseking_img, self.cat_img, self.cheese_img, self.wall_img = (
-            load_scale("mouse.png"), load_scale("mouseking.png"), load_scale("cat.png"), 
-            load_scale("cheese.png"), load_scale("wall.png"))
+        self.mouse_img = load_and_scale("mouse.png")
+        self.mouseking_img = load_and_scale("mouseking.png")
+        self.cat_img = load_and_scale("cat.png")
+        self.cheese_img = load_and_scale("cheese.png")
+        self.wall_img = load_and_scale("wall.png")
         
-        back_path = os.path.join("assets", "back.png")
-        self.background_img = pygame.transform.scale(pygame.image.load(back_path).convert(), 
-                              (SCREEN_WIDTH, SCREEN_HEIGHT)) if os.path.exists(back_path) else None
+        background_path = os.path.join("assets", "back.png")
+        if os.path.exists(background_path):
+            background = pygame.image.load(background_path).convert()
+            self.background_img = pygame.transform.scale(background, (SCREEN_WIDTH, SCREEN_HEIGHT))
+        else:
+            self.background_img = None
 
     def initialize_game(self):
         self.board = [[0] * self.board_size for _ in range(self.board_size)]
-        self.cat_memory, self.cat_stuck_counter, self.last_cat_pos, self.flee_target = [], 0, None, None
         
-        self.cat_move_timer, self.cat_move_delay = pygame.time.get_ticks(), {'easy': 450, 'medium': 350, 'hard': 250}[self.cat_difficulty]
-        
-        wall_count = {'easy': 20, 'medium': 15, 'hard': 10}[self.cat_difficulty]
+        wall_count = 15
         walls = set()
         while len(walls) < wall_count:
-            walls.add((random.randint(1, self.board_size - 2), random.randint(1, self.board_size - 2)))
-        for x, y in walls: 
+            x = random.randint(1, self.board_size - 2)
+            y = random.randint(1, self.board_size - 2)
+            walls.add((x, y))
+        
+        for x, y in walls:
             self.board[y][x] = 1
-                
+        
         while True:
-            mx, my = random.randint(1, 5), random.randint(1, 5)
-            cx, cy = random.randint(self.board_size - 6, self.board_size - 2), random.randint(self.board_size - 6, self.board_size - 2)
-            if self.board[my][mx] == 0 and self.board[cy][cx] == 0 and abs(mx - cx) + abs(my - cy) > 10:
+            mouse_x = random.randint(1, 5)
+            mouse_y = random.randint(1, 5)
+            cat_x = random.randint(self.board_size - 6, self.board_size - 2)
+            cat_y = random.randint(self.board_size - 6, self.board_size - 2)
+            
+            mouse_cell_empty = self.board[mouse_y][mouse_x] == 0
+            cat_cell_empty = self.board[cat_y][cat_x] == 0
+            distance = abs(mouse_x - cat_x) + abs(mouse_y - cat_y)
+            
+            if mouse_cell_empty and cat_cell_empty and distance > 10:
                 break
-        self.mouse_pos, self.cat_pos = {'x': mx, 'y': my}, {'x': cx, 'y': cy}
+        
+        self.mouse_pos = {'x': mouse_x, 'y': mouse_y}
+        self.cat_pos = {'x': cat_x, 'y': cat_y}
         
         self.cheese_positions = []
         while len(self.cheese_positions) < 3:
-            cx, cy = random.randint(1, self.board_size - 2), random.randint(1, self.board_size - 2)
-            if (self.board[cy][cx] == 0 and (cx, cy) != (mx, my) and (cx, cy) != (self.cat_pos['x'], self.cat_pos['y']) 
-                and not any(c['x'] == cx and c['y'] == cy for c in self.cheese_positions)):
-                self.cheese_positions.append({'x': cx, 'y': cy})
-        self.cheese_collected, self.is_king_mouse, self.player_moved, self.start_time = 0, False, False, pygame.time.get_ticks()
+            cheese_x = random.randint(1, self.board_size - 2)
+            cheese_y = random.randint(1, self.board_size - 2)
+            
+            cell_empty = self.board[cheese_y][cheese_x] == 0
+            not_on_mouse = (cheese_x, cheese_y) != (mouse_x, mouse_y)
+            not_on_cat = (cheese_x, cheese_y) != (cat_x, cat_y)
+            not_duplicate = not any(c['x'] == cheese_x and c['y'] == cheese_y for c in self.cheese_positions)
+            
+            if cell_empty and not_on_mouse and not_on_cat and not_duplicate:
+                self.cheese_positions.append({'x': cheese_x, 'y': cheese_y})
+        
+        self.cheese_collected = 0
+        self.is_king_mouse = False
+        self.player_moved = False
+        self.start_time = pygame.time.get_ticks()
 
-    def move_character(self, pos, dx, dy):
-        nx, ny = pos['x'] + dx, pos['y'] + dy
-        if 0 <= nx < self.board_size and 0 <= ny < self.board_size and self.board[ny][nx] != 1:
-            pos['x'], pos['y'] = nx, ny
+    def move_character(self, position, delta_x, delta_y):
+        new_x = position['x'] + delta_x
+        new_y = position['y'] + delta_y
+        
+        in_bounds = 0 <= new_x < self.board_size and 0 <= new_y < self.board_size
+        
+        if not in_bounds:
+            return False
+        
+        not_wall = self.board[new_y][new_x] != 1
+        
+        if not_wall:
+            position['x'] = new_x
+            position['y'] = new_y
             return True
         return False
 
